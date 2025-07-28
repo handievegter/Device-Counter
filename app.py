@@ -190,7 +190,6 @@ def style_customer_rows(df: pd.DataFrame, customer_col: str):
 # --- Streamlit UI ---
 
 st.set_page_config(page_title="Device Type Counter", layout="wide")
-st.title("📊 Device Type Counter")
 
 st.set_page_config(
    page_title=" Device Type Counter ",
@@ -261,14 +260,21 @@ if uploaded_file:
         for sheet_name, df in processed_sheets.items():
             df.to_excel(writer, sheet_name=sheet_name, index=False)
 
-            # Apply bold + underline to customer rows
+            # Apply formatting to customer rows: gray fill for row, bold NEW QTY
             worksheet = writer.sheets[sheet_name]
             if "Customer Code" in df.columns:
+                from openpyxl.styles import PatternFill, Font
+
                 customer_col_index = df.columns.get_loc("Customer Code")  # 0-based index
+                qty_col_index = df.columns.get_loc("NEW QTY")
+
                 for row_idx, val in enumerate(df["Customer Code"], start=2):  # Excel rows start at 1, plus header
                     if pd.notna(val) and str(val).strip() != "":
-                        cell = worksheet.cell(row=row_idx, column=customer_col_index + 1)
-                        cell.font = cell.font.copy(bold=True, underline="single")
+                        # Gray fill for the entire row
+                        for col_idx in range(1, len(df.columns) + 1):
+                            worksheet.cell(row=row_idx, column=col_idx).fill = PatternFill(start_color="DDDDDD", end_color="DDDDDD", fill_type="solid")
+                        # Bold NEW QTY
+                        worksheet.cell(row=row_idx, column=qty_col_index + 1).font = Font(bold=True)
     output.seek(0)
 
     # Download button
