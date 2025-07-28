@@ -189,9 +189,15 @@ def style_customer_rows(df: pd.DataFrame, customer_col: str):
 
 # --- Streamlit UI ---
 
-st.set_page_config(page_title="Device Counter", layout="wide")
-st.title("📊 Device Counter App")
+st.set_page_config(page_title="Device Type Counter", layout="wide")
+st.title("📊 Device Type Counter")
 
+st.set_page_config(
+   page_title=" Device Type Counter ",
+   page_icon="🐝"
+)
+
+st.title("Device Type Counter")
 
 uploaded_file = st.file_uploader("📤 Upload an Excel file", type=["xlsx"])
 
