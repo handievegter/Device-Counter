@@ -2,10 +2,14 @@ import streamlit as st
 import pandas as pd
 import io
 import re
+from typing import Optional, Dict
+
+# Global dictionary to store unknown device mappings
+unknown_device_mappings: Dict[str, str] = {}
 
 # --- Classification Logic ---
 
-def classify_device_type(device: str) -> str:
+def classify_device_type(device: str) -> Optional[str]:
     """
     Classify device into one of the known categories:
     - BAC-I, I-CAB, I-CAB H, I-CAB M, BEAME
@@ -22,7 +26,7 @@ def classify_device_type(device: str) -> str:
         return 'BEAME'
 
     # BAC-I
-    if 'baci' in norm:
+    if 'baci' in norm or 'bai03' in norm:
         return 'BAC-I'
 
     # I-CAB M
@@ -43,12 +47,24 @@ def classify_device_type(device: str) -> str:
 
     return None
 
+def classify_device_type_with_overrides(device: str) -> Optional[str]:
+    """
+    Classify device using user overrides if present, else fall back to default classification.
+    """
+    if not isinstance(device, str):
+        return None
+
+    key = device.strip()
+    if key in unknown_device_mappings:
+        return unknown_device_mappings[key]
+    return classify_device_type(device)
+
 # --- Sheet Processing ---
 
-def process_flexible_sheet(df: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
+def process_flexible_sheet(df: pd.DataFrame, sheet_name: str, classify_func=classify_device_type) -> pd.DataFrame:
     """
     Process any sheet with customer/device/qty columns.
-    Uses classify_device_type() to count devices and adds them to customer rows.
+    Uses classify_func() to count devices and adds them to customer rows.
     """
 
     df = df.copy()
@@ -66,7 +82,7 @@ def process_flexible_sheet(df: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
     df = df.loc[:, ~df.columns.str.lower().str.contains('^nan$|^unnamed')]
 
     # Find expected columns
-    col_map = {
+    col_map: Dict[str, Optional[str]] = {
         'customer': None,
         'device': None,
         'qty': None
@@ -82,11 +98,10 @@ def process_flexible_sheet(df: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
             col_map['qty'] = col
 
     if not all(col_map.values()):
-        st.warning(f"⚠️ Skipping sheet '{sheet_name}' — required columns not found.")
         return df
 
     # Forward-fill customer names
-    df[col_map['customer']] = df[col_map['customer']].fillna(method='ffill')
+    df[col_map['customer']] = df[col_map['customer']].ffill()
 
     categories = ['BAC-I', 'I-CAB', 'I-CAB H', 'I-CAB M', 'BEAME']
     for cat in categories:
@@ -106,7 +121,7 @@ def process_flexible_sheet(df: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
             except:
                 qty = 0
 
-            category = classify_device_type(device)
+            category = classify_func(device)
             if category:
                 counts[category] += qty
 
@@ -126,11 +141,14 @@ def process_flexible_sheet(df: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
     df['NEW QTY'] = ''
     for customer, group in grouped:
         first_row = group.index[0]
-        try:
-            total = sum(int(df.at[first_row, col] or 0) for col in categories)
-            df.at[first_row, 'NEW QTY'] = total
-        except:
-            df.at[first_row, 'NEW QTY'] = ''
+        total = 0
+        for col in categories:
+            try:
+                val = df.at[first_row, col]
+                total += int(val) if val not in [None, ''] else 0
+            except:
+                pass
+        df.at[first_row, 'NEW QTY'] = total
 
     # Reorder columns: original 3 + NEW QTY + summary (I-CAB before BAC-I)
     final_order = [
@@ -149,18 +167,31 @@ def process_flexible_sheet(df: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
     return df
 
 
-def process_sheet_if_applicable(df: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
+def process_sheet_if_applicable(df: pd.DataFrame, sheet_name: str, classify_func=classify_device_type) -> pd.DataFrame:
     """
     Process all sheets except 'De/Re/Maintenance'
     """
     if sheet_name.strip().lower() == "de/re/maintenance":
         return df
-    return process_flexible_sheet(df, sheet_name)
+    return process_flexible_sheet(df, sheet_name, classify_func=classify_func)
+
+def style_customer_rows(df: pd.DataFrame, customer_col: str):
+    """
+    Apply bold + underline style to rows where customer code is present.
+    Works only for visual display in Streamlit.
+    """
+    def highlight_row(row):
+        is_customer = bool(row[customer_col]) and not pd.isna(row[customer_col])
+        style = 'font-weight: bold; text-decoration: underline;' if is_customer else ''
+        return [style] * len(row)
+
+    return df.style.apply(highlight_row, axis=1)
 
 # --- Streamlit UI ---
 
 st.set_page_config(page_title="Device Counter", layout="wide")
 st.title("📊 Device Counter App")
+
 
 uploaded_file = st.file_uploader("📤 Upload an Excel file", type=["xlsx"])
 
@@ -170,19 +201,68 @@ if uploaded_file:
 
     processed_sheets = {}
 
+    # First pass: process sheets with default classification
     for sheet in xls.sheet_names:
         df = xls.parse(sheet)
-        processed_df = process_sheet_if_applicable(df, sheet)
+        processed_df = process_sheet_if_applicable(df, str(sheet))
         processed_sheets[sheet] = processed_df
 
-        st.subheader(f"📄 Preview: {sheet}")
-        st.dataframe(processed_df.head(10))
+    # Collect unknown device types from all sheets
+    unknown_devices_set = set()
+    for sheet, df in processed_sheets.items():
+        # Identify device column
+        device_col = None
+        # Try to find device column by checking columns
+        for col in df.columns:
+            if 'device' in col.lower():
+                device_col = col
+                break
+        if not device_col:
+            continue
+        # Check each device in the sheet
+        for device in df[device_col].dropna().unique():
+            if device and classify_device_type(device) is None:
+                unknown_devices_set.add(device.strip())
 
-    # Save to Excel in memory
+    if unknown_devices_set:
+        st.warning("⚠️ Unknown device types detected. Please classify them below:")
+
+        with st.form("device_classification_form"):
+            for device in sorted(unknown_devices_set):
+                if device not in unknown_device_mappings:
+                    unknown_device_mappings[device] = "Select category"
+            for device in sorted(unknown_devices_set):
+                options = ["Select category", "BAC-I", "I-CAB", "I-CAB H", "I-CAB M", "BEAME"]
+                choice = st.selectbox(f"Device: {device}", options, index=options.index(unknown_device_mappings.get(device, "Select category")), key=f"device_{device}")
+                unknown_device_mappings[device] = choice
+
+            submitted = st.form_submit_button("Submit classifications")
+
+        if submitted:
+            # Remove entries with 'Select category'
+            unknown_device_mappings = {k: v for k, v in unknown_device_mappings.items() if v != 'Select category'}
+
+            # Re-process sheets with overrides
+            processed_sheets = {}
+            for sheet in xls.sheet_names:
+                df = xls.parse(sheet)
+                processed_df = process_sheet_if_applicable(df, str(sheet), classify_func=classify_device_type_with_overrides)
+                processed_sheets[sheet] = processed_df
+
     output = io.BytesIO()
+    # Save to Excel in memory
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         for sheet_name, df in processed_sheets.items():
             df.to_excel(writer, sheet_name=sheet_name, index=False)
+
+            # Apply bold + underline to customer rows
+            worksheet = writer.sheets[sheet_name]
+            if "Customer Code" in df.columns:
+                customer_col_index = df.columns.get_loc("Customer Code")  # 0-based index
+                for row_idx, val in enumerate(df["Customer Code"], start=2):  # Excel rows start at 1, plus header
+                    if pd.notna(val) and str(val).strip() != "":
+                        cell = worksheet.cell(row=row_idx, column=customer_col_index + 1)
+                        cell.font = cell.font.copy(bold=True, underline="single")
     output.seek(0)
 
     # Download button
