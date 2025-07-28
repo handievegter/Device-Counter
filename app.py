@@ -3,6 +3,7 @@ import pandas as pd
 import io
 import re
 from typing import Optional, Dict
+from openpyxl.styles import PatternFill, Font
 
 # Global dictionary to store unknown device mappings
 unknown_device_mappings: Dict[str, str] = {}
@@ -262,19 +263,18 @@ if uploaded_file:
 
             # Apply formatting to customer rows: gray fill for row, bold NEW QTY
             worksheet = writer.sheets[sheet_name]
-            if "Customer Code" in df.columns:
-                from openpyxl.styles import PatternFill, Font
-
-                customer_col_index = df.columns.get_loc("Customer Code")  # 0-based index
+            if "Customer Code" in df.columns and "NEW QTY" in df.columns:
+                customer_col_index = df.columns.get_loc("Customer Code")
                 qty_col_index = df.columns.get_loc("NEW QTY")
 
-                for row_idx, val in enumerate(df["Customer Code"], start=2):  # Excel rows start at 1, plus header
+                for row_idx, val in enumerate(df["Customer Code"], start=2):
                     if pd.notna(val) and str(val).strip() != "":
-                        # Gray fill for the entire row
                         for col_idx in range(1, len(df.columns) + 1):
-                            worksheet.cell(row=row_idx, column=col_idx).fill = PatternFill(start_color="DDDDDD", end_color="DDDDDD", fill_type="solid")
-                        # Bold NEW QTY
-                        worksheet.cell(row=row_idx, column=qty_col_index + 1).font = Font(bold=True)
+                            worksheet.cell(row=row_idx, column=col_idx).fill = PatternFill(
+                                start_color="DDDDDD", end_color="DDDDDD", fill_type="solid"
+                            )
+                        new_qty_cell = worksheet.cell(row=row_idx, column=qty_col_index + 1)
+                        new_qty_cell.font = Font(bold=True)
     output.seek(0)
 
     # Download button
